@@ -9,7 +9,7 @@ resource "aws_kms_key" "s3_key" {
       "Sid": "Enable IAM User Permissions",
       "Effect": "Allow",
       "Principal": {
-        "AWS": "arn:aws:iam::${var.aws_account_id}:root"
+        "AWS": "arn:aws:iam::${var.aws_account_id}:my_iam_user"
       },
       "Action": "kms:*",
       "Resource": "*"
@@ -18,6 +18,8 @@ resource "aws_kms_key" "s3_key" {
 }
 POLICY
 }
+
+# Create S3 buckets for file upload and processed files
 
 resource "aws_s3_bucket" "file_upload_bucket" {
   bucket = "my-file-upload-bucket"
@@ -70,11 +72,12 @@ resource "aws_s3_bucket" "processed_files_bucket" {
   }
 }
 
+
 # Create CloudFront distribution for content delivery
 
 resource "aws_cloudfront_distribution" "s3_distribution" {
   origin {
-    domain_name = aws_s3_bucket.file_upload_bucket.bucket_regional_domain_name
+    domain_name = aws_s3_bucket.processed_files_bucket.bucket_regional_domain_name
     origin_id   = "S3Origin"
 
     s3_origin_config {
@@ -252,4 +255,89 @@ resource "aws_api_gateway_usage_plan_key" "main" {
   key_id        = aws_api_gateway_api_key.access.id
   key_type      = "API_KEY"
   usage_plan_id = aws_api_gateway_usage_plan.main.id
+}
+
+
+# Create EKS Cluster for microservices deployment
+
+resource "aws_eks_cluster" "example" {
+  name     = "example"
+  role_arn = aws_iam_role.eks_cluster.arn
+
+  vpc_config {
+    subnet_ids = [aws_subnet.example.id]
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.eks_cluster_AmazonEKSClusterPolicy,
+    aws_iam_role_policy_attachment.eks_cluster_AmazonEKSVPCResourceController,
+  ]
+}
+
+resource "aws_iam_role" "eks_cluster" {
+  name = "example_eks_cluster_role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [{
+      Action = "sts:AssumeRole",
+      Effect = "Allow",
+      Principal = {
+        Service = "eks.amazonaws.com"
+      }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "eks_cluster_AmazonEKSClusterPolicy" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
+  role       = aws_iam_role.eks_cluster.name
+}
+
+resource "aws_iam_role_policy_attachment" "eks_cluster_AmazonEKSVPCResourceController" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSVPCResourceController"
+  role       = aws_iam_role.eks_cluster.name
+}
+
+resource "aws_eks_node_group" "example" {
+  cluster_name    = aws_eks_cluster.example.name
+  node_group_name = "example-node-group"
+  node_role_arn   = aws_iam_role.eks_node.arn
+  subnet_ids      = [aws_subnet.example.id]
+
+  scaling_config {
+    desired_size = 2
+    max_size     = 3
+    min_size     = 1
+  }
+}
+
+resource "aws_iam_role" "eks_node" {
+  name = "example_eks_node_role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [{
+      Action = "sts:AssumeRole",
+      Effect = "Allow",
+      Principal = {
+        Service = "ec2.amazonaws.com"
+      }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "eks_node_AmazonEKSWorkerNodePolicy" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
+  role       = aws_iam_role.eks_node.name
+}
+
+resource "aws_iam_role_policy_attachment" "eks_node_AmazonEKS_CNI_Policy" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
+  role       = aws_iam_role.eks_node.name
+}
+
+resource "aws_iam_role_policy_attachment" "eks_node_AmazonEC2ContainerRegistryReadOnly" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+  role       = aws_iam_role.eks_node.name
 }
